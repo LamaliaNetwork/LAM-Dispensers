@@ -109,7 +109,7 @@ public class DispenserPlacementHandler implements Listener {
                 if (removeItem(dispenser, selectedItem)) {
                     Material originalType = frontBlock.getType();
                     frontBlock.setType(selectedItem.getType());
-                    plugin.getLogger().info("Dispenser placed a " + selectedItem.getType() + " block, replacing " + originalType);
+                    //plugin.getLogger().info("Dispenser placed a " + selectedItem.getType() + " block, replacing " + originalType);
                 }
             }
         });

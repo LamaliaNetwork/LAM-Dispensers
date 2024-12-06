@@ -4,6 +4,8 @@ import org.bukkit.Bukkit;
 import org.mineacademy.fo.plugin.SimplePlugin;
 import org.yusaki.lib.YskLib;
 
+import static org.bukkit.Bukkit.getPluginManager;
+
 public final class LamDispensers extends SimplePlugin {
 
     private YskLib yskLib;
@@ -11,7 +13,7 @@ public final class LamDispensers extends SimplePlugin {
 
     @Override
     public void onPluginStart() {
-        yskLib = (YskLib) Bukkit.getPluginManager().getPlugin("YskLib");
+        yskLib = (YskLib) getPluginManager().getPlugin("YskLib");
         wrapper = new YskLibWrapper(this, yskLib);
 
         // Register the new DispenserPlacementHandler
