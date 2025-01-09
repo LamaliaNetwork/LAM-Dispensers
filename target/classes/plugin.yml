@@ -1,5 +1,0 @@
-name: LamDispensers
-version: '1.0.1'
-main: org.yusaki.lamdispensers.LamDispensers
-api-version: '1.21.1'
-folia-supported: true

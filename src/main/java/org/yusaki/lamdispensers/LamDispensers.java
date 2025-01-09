@@ -12,14 +12,15 @@ public final class LamDispensers extends JavaPlugin {
 
     @Override
     public void onEnable() {
+        
         yskLib = (YskLib) getPluginManager().getPlugin("YskLib");
         wrapper = new YskLibWrapper(this, yskLib);
 
-        // Register the new DispenserPlacementHandler
-        DispenserPlacementHandler handler = new DispenserPlacementHandler(this);
-        getServer().getPluginManager().registerEvents(handler, this);
-
+    
+        // Register handlers
+        DispenserPlacementHandler placementHandler = new DispenserPlacementHandler(this);
         DispenserMiningHandler miningHandler = new DispenserMiningHandler(this);
+        getServer().getPluginManager().registerEvents(placementHandler, this);
         getServer().getPluginManager().registerEvents(miningHandler, this);
 
         wrapper.logDebug("LamDispensers enabled!");
@@ -29,4 +30,10 @@ public final class LamDispensers extends JavaPlugin {
     public void onDisable() {
         wrapper.logDebug("LamDispensers disabled!");
     }
+
+    public YskLibWrapper getWrapper() {
+        return wrapper;
+    }
+
+
 }

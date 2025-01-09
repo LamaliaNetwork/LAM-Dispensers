@@ -79,8 +79,15 @@ public class DispenserMiningHandler implements Listener {
     }
 
     private void scheduleBlockBreak(Location loc, Dispenser dispenser, ItemStack pickaxe, Block block, long delay) {
+        Material originalType = block.getType(); // Store the original block type
+        Location originalLocation = block.getLocation().clone(); // Store the original location
+        
         plugin.getServer().getRegionScheduler().runDelayed(plugin, loc, (a) -> {
-            performInstantMining(dispenser, pickaxe, block);
+            // Check if the block still exists at the same location and is the same type
+            if (block.getLocation().equals(originalLocation) && block.getType() == originalType) {
+                performInstantMining(dispenser, pickaxe, block);
+            }
+            // If block changed, moved, or was broken, do nothing
         }, delay);
     }
 
@@ -103,21 +110,35 @@ public class DispenserMiningHandler implements Listener {
             for (int i = 0; i < contents.length; i++) {
                 ItemStack item = contents[i];
                 if (item != null && item.equals(pickaxe)) {
-                    short newDurability = (short) (item.getDurability() + 1);
-                    item.setDurability(newDurability);
+                    // Check for Unbreaking enchantment
+                    int unbreakingLevel = item.getEnchantmentLevel(Enchantment.UNBREAKING);
                     
-                    // Update the item in the dispenser
-                    dispenser.getInventory().setItem(i, item);
+                    // Calculate if damage should be applied
+                    boolean shouldTakeDamage = true;
+                    if (unbreakingLevel > 0) {
+                        // Unbreaking has a chance to prevent durability loss
+                        // Formula: 100/(unbreaking level + 1)% chance to reduce durability
+                        double chance = 1.0 / (unbreakingLevel + 1);
+                        shouldTakeDamage = Math.random() < chance;
+                    }
                     
-                    // Check if pickaxe should break
-                    if (newDurability >= item.getType().getMaxDurability()) {
-                        block.getWorld().playSound(
-                            dispenser.getLocation(),
-                            org.bukkit.Sound.ENTITY_ITEM_BREAK,
-                            1.0f,
-                            1.0f
-                        );
-                        dispenser.getInventory().setItem(i, null);
+                    if (shouldTakeDamage) {
+                        short newDurability = (short) (item.getDurability() + 1);
+                        item.setDurability(newDurability);
+                        
+                        // Update the item in the dispenser
+                        dispenser.getInventory().setItem(i, item);
+                        
+                        // Check if pickaxe should break
+                        if (newDurability >= item.getType().getMaxDurability()) {
+                            block.getWorld().playSound(
+                                dispenser.getLocation(),
+                                org.bukkit.Sound.ENTITY_ITEM_BREAK,
+                                1.0f,
+                                1.0f
+                            );
+                            dispenser.getInventory().setItem(i, null);
+                        }
                     }
                     break;
                 }
@@ -149,29 +170,36 @@ public class DispenserMiningHandler implements Listener {
     }
 
     private float calculateMiningTicks(ItemStack pickaxe, Block block) {
+        float hardness = block.getType().getHardness();
+        if (hardness == 0) return 0.05f; // Instant break for zero hardness blocks
+        
         float baseSpeed = getBaseBreakingSpeed(pickaxe.getType(), block.getType());
         int efficiencyLevel = pickaxe.getEnchantmentLevel(Enchantment.EFFICIENCY);
         
+        // Calculate speed similar to vanilla mechanics
+        float speed = baseSpeed;
         if (efficiencyLevel > 0) {
-            baseSpeed += (efficiencyLevel * efficiencyLevel + 1);
+            speed += Math.pow(efficiencyLevel, 2) + 1;
         }
 
-        return Math.max(1.5f / baseSpeed, 0.05f);
+        // Calculate breaking time according to vanilla mechanics
+        float hardnessMultiplier = isCorrectToolForBlock(pickaxe.getType(), block.getType()) ? 1.5f : 5.0f;
+        float breakingTime = (hardness * hardnessMultiplier) / speed;
+        
+        
+        // Cap minimum and maximum times
+        return Math.max(0.05f, Math.min(breakingTime, 10f));
     }
 
     private float getBaseBreakingSpeed(Material tool, Material block) {
-        // These values are approximate. Adjust as needed.
-        if (isCorrectToolForBlock(tool, block)) {
-            switch (tool) {
-                case NETHERITE_PICKAXE: return 9.0f;
-                case DIAMOND_PICKAXE: return 8.0f;
-                case IRON_PICKAXE: return 6.0f;
-                case STONE_PICKAXE: return 4.0f;
-                case WOODEN_PICKAXE: return 2.0f;
-                default: return 1.0f;
-            }
+        switch (tool) {
+            case NETHERITE_PICKAXE: return 10.0f;
+            case DIAMOND_PICKAXE: return 8.0f;
+            case IRON_PICKAXE: return 6.0f;
+            case STONE_PICKAXE: return 4.0f;
+            case WOODEN_PICKAXE: return 2.0f;
+            default: return 1.0f;
         }
-        return 0.3f; // Wrong tool penalty
     }
 
     private boolean isPickaxe(Material material) {
@@ -188,12 +216,42 @@ public class DispenserMiningHandler implements Listener {
     }
 
     private boolean isCorrectToolForBlock(Material tool, Material block) {
-        // Add more block types as needed
-        return block.name().contains("STONE") || 
-               block.name().contains("ORE") || 
-               block.name().contains("BRICK") ||
-               block.name().contains("CONCRETE") ||
-               block.name().contains("TERRACOTTA");
+        // More specific tool-block matching
+        if (!isPickaxe(tool)) return false;
+
+        // Check block hardness and material type
+        switch (block) {
+            case OBSIDIAN:
+            case CRYING_OBSIDIAN:
+            case ANCIENT_DEBRIS:
+                // Only diamond and netherite pickaxes
+                return tool == Material.DIAMOND_PICKAXE || tool == Material.NETHERITE_PICKAXE;
+            
+            case DIAMOND_BLOCK:
+            case DIAMOND_ORE:
+            case DEEPSLATE_DIAMOND_ORE:
+            case EMERALD_ORE:
+            case DEEPSLATE_EMERALD_ORE:
+            case GOLD_BLOCK:
+            case GOLD_ORE:
+            case DEEPSLATE_GOLD_ORE:
+                // Iron pickaxe or better
+                return tool == Material.IRON_PICKAXE || 
+                       tool == Material.DIAMOND_PICKAXE || 
+                       tool == Material.NETHERITE_PICKAXE;
+            
+            default:
+                // General pickaxe-mineable blocks
+                return block.name().contains("STONE") || 
+                       block.name().contains("ORE") || 
+                       block.name().contains("BRICK") ||
+                       block.name().contains("CONCRETE") ||
+                       block.name().contains("TERRACOTTA") ||
+                       block.name().contains("DEEPSLATE") ||
+                       block.name().contains("GRANITE") ||
+                       block.name().contains("ANDESITE") ||
+                       block.name().contains("DIORITE");
+        }
     }
 
     private void removePickaxe(Dispenser dispenser, ItemStack pickaxe) {
