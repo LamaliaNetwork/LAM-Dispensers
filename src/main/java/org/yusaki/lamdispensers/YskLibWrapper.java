@@ -34,4 +34,5 @@ public class YskLibWrapper {
     public void logDebugPlayer(Player player, String s) {
         yskLib.logDebugPlayer(plugin, player, s);
     }
+
 }

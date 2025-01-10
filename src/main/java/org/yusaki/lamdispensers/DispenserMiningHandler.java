@@ -28,7 +28,7 @@ public class DispenserMiningHandler implements Listener {
         if (!(dispenserBlock.getBlockData() instanceof Directional)) return;
 
         ItemStack dispensedItem = event.getItem();
-        if (!isPickaxe(dispensedItem.getType())) return;
+        if (!isTool(dispensedItem.getType())) return;
 
         // Cancel the event early for pickaxes
         event.setCancelled(true);
@@ -123,7 +123,9 @@ public class DispenserMiningHandler implements Listener {
                     }
                     
                     if (shouldTakeDamage) {
-                        short newDurability = (short) (item.getDurability() + 1);
+                        // Apply 10x durability damage if wrong tool
+                        int durabilityDamage = isCorrectToolForBlock(pickaxe.getType(), block.getType()) ? 1 : 10;
+                        short newDurability = (short) (item.getDurability() + durabilityDamage);
                         item.setDurability(newDurability);
                         
                         // Update the item in the dispenser
@@ -174,84 +176,89 @@ public class DispenserMiningHandler implements Listener {
         if (hardness == 0) return 0.05f; // Instant break for zero hardness blocks
         
         float baseSpeed = getBaseBreakingSpeed(pickaxe.getType(), block.getType());
-        int efficiencyLevel = pickaxe.getEnchantmentLevel(Enchantment.EFFICIENCY);
+        boolean isCorrectTool = isCorrectToolForBlock(pickaxe.getType(), block.getType());
         
-        // Calculate speed similar to vanilla mechanics
+        // Only apply efficiency if using correct tool
         float speed = baseSpeed;
-        if (efficiencyLevel > 0) {
-            speed += Math.pow(efficiencyLevel, 2) + 1;
+        if (isCorrectTool) {
+            int efficiencyLevel = pickaxe.getEnchantmentLevel(Enchantment.EFFICIENCY);
+            if (efficiencyLevel > 0) {
+                speed += Math.pow(efficiencyLevel, 2) + 1;
+            }
         }
 
         // Calculate breaking time according to vanilla mechanics
-        float hardnessMultiplier = isCorrectToolForBlock(pickaxe.getType(), block.getType()) ? 1.5f : 5.0f;
+        float hardnessMultiplier = isCorrectTool ? 1.5f : 5.0f;
         float breakingTime = (hardness * hardnessMultiplier) / speed;
         
-        
         // Cap minimum and maximum times
-        return Math.max(0.05f, Math.min(breakingTime, 10f));
+        return Math.max(0.05f, Math.min(breakingTime, 20f));
     }
 
     private float getBaseBreakingSpeed(Material tool, Material block) {
-        switch (tool) {
-            case NETHERITE_PICKAXE: return 10.0f;
-            case DIAMOND_PICKAXE: return 8.0f;
-            case IRON_PICKAXE: return 6.0f;
-            case STONE_PICKAXE: return 4.0f;
-            case WOODEN_PICKAXE: return 2.0f;
-            default: return 1.0f;
-        }
+        if (tool.name().contains("NETHERITE")) return 10.0f;
+        if (tool.name().contains("DIAMOND")) return 8.0f;
+        if (tool.name().contains("IRON")) return 6.0f;
+        if (tool.name().contains("STONE")) return 4.0f;
+        if (tool.name().contains("WOODEN")) return 2.0f;
+        return 1.0f;
     }
 
-    private boolean isPickaxe(Material material) {
-        return material == Material.DIAMOND_PICKAXE || 
-               material == Material.IRON_PICKAXE || 
-               material == Material.STONE_PICKAXE || 
-               material == Material.WOODEN_PICKAXE || 
-               material == Material.NETHERITE_PICKAXE;
-    }
-
-    private boolean canMineBlock(ItemStack pickaxe, Block block) {
-        return block.getType().isSolid() && !block.getType().isAir() && 
-               isCorrectToolForBlock(pickaxe.getType(), block.getType());
+    private boolean canMineBlock(ItemStack tool, Block block) {
+        return block.getType().isSolid() && !block.getType().isAir(); // Removed tool check
     }
 
     private boolean isCorrectToolForBlock(Material tool, Material block) {
-        // More specific tool-block matching
-        if (!isPickaxe(tool)) return false;
-
-        // Check block hardness and material type
-        switch (block) {
-            case OBSIDIAN:
-            case CRYING_OBSIDIAN:
-            case ANCIENT_DEBRIS:
-                // Only diamond and netherite pickaxes
+        String toolName = tool.name();
+        String blockName = block.name();
+        
+        // Pickaxe materials
+        if (toolName.endsWith("PICKAXE")) {
+            if (block == Material.OBSIDIAN || block == Material.CRYING_OBSIDIAN || block == Material.ANCIENT_DEBRIS) {
                 return tool == Material.DIAMOND_PICKAXE || tool == Material.NETHERITE_PICKAXE;
+            }
             
-            case DIAMOND_BLOCK:
-            case DIAMOND_ORE:
-            case DEEPSLATE_DIAMOND_ORE:
-            case EMERALD_ORE:
-            case DEEPSLATE_EMERALD_ORE:
-            case GOLD_BLOCK:
-            case GOLD_ORE:
-            case DEEPSLATE_GOLD_ORE:
-                // Iron pickaxe or better
-                return tool == Material.IRON_PICKAXE || 
-                       tool == Material.DIAMOND_PICKAXE || 
-                       tool == Material.NETHERITE_PICKAXE;
+            if (blockName.contains("DIAMOND") || blockName.contains("EMERALD") || blockName.contains("GOLD")) {
+                return tool == Material.IRON_PICKAXE || tool == Material.DIAMOND_PICKAXE || tool == Material.NETHERITE_PICKAXE;
+            }
             
-            default:
-                // General pickaxe-mineable blocks
-                return block.name().contains("STONE") || 
-                       block.name().contains("ORE") || 
-                       block.name().contains("BRICK") ||
-                       block.name().contains("CONCRETE") ||
-                       block.name().contains("TERRACOTTA") ||
-                       block.name().contains("DEEPSLATE") ||
-                       block.name().contains("GRANITE") ||
-                       block.name().contains("ANDESITE") ||
-                       block.name().contains("DIORITE");
+            return blockName.contains("STONE") || blockName.contains("ORE") || 
+                   blockName.contains("BRICK") || blockName.contains("CONCRETE") ||
+                   blockName.contains("TERRACOTTA") || blockName.contains("DEEPSLATE") ||
+                   blockName.contains("GRANITE") || blockName.contains("ANDESITE") ||
+                   blockName.contains("DIORITE");
         }
+        
+        // Axe materials
+        if (toolName.endsWith("_AXE")) {
+            return blockName.contains("LOG") || blockName.contains("WOOD") || 
+                   blockName.contains("PLANK") || blockName.contains("FENCE") ||
+                   blockName.contains("DOOR") || blockName.contains("TRAPDOOR") ||
+                   blockName.contains("STAIRS") && block.name().contains("WOOD");
+        }
+        
+        // Shovel materials
+        if (toolName.endsWith("_SHOVEL")) {
+            return block == Material.DIRT || block == Material.GRASS_BLOCK ||
+                   block == Material.SAND || block == Material.GRAVEL ||
+                   block == Material.CLAY || block == Material.SOUL_SAND ||
+                   block == Material.SOUL_SOIL || block == Material.MYCELIUM ||
+                   block == Material.SNOW || block == Material.SNOW_BLOCK;
+        }
+        
+        // Hoe materials
+        if (toolName.endsWith("_HOE")) {
+            return // Add crop support
+                   block == Material.WHEAT || block == Material.CARROTS ||
+                   block == Material.POTATOES || block == Material.BEETROOTS ||
+                   block == Material.NETHER_WART || block == Material.COCOA ||
+                   blockName.contains("CROP") || blockName.contains("SEEDS") ||
+                   // Add farmland/dirt support
+                   block == Material.FARMLAND || block == Material.DIRT ||
+                   block == Material.GRASS_BLOCK || block == Material.DIRT_PATH;
+        }
+        
+        return false;
     }
 
     private void removePickaxe(Dispenser dispenser, ItemStack pickaxe) {
@@ -263,5 +270,12 @@ public class DispenserMiningHandler implements Listener {
             }
         }
         dispenser.getInventory().setContents(contents);
+    }
+
+    private boolean isTool(Material material) {
+        return material.name().endsWith("_PICKAXE") ||
+               material.name().endsWith("_AXE") ||
+               material.name().endsWith("_SHOVEL") ||
+               material.name().endsWith("_HOE");
     }
 } 

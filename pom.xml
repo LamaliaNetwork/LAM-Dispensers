@@ -84,6 +84,14 @@
              Please see the maven-shade-plugin below and configure inclusions properly otherwise
              your file will shade with all the dependencies resulting it crashes and huge file size. -->
 
+
+        <dependency>
+            <groupId>paper-server</groupId>
+            <artifactId>Folia-1.21.1</artifactId>
+            <version>1</version>
+            <scope>system</scope>
+            <systemPath>${project.basedir}/libs/folia-1.21.1.jar</systemPath>
+        </dependency>
         <dependency>
             <groupId>com.yusaki.lib</groupId>
             <artifactId>YskLib-1.0.0</artifactId>

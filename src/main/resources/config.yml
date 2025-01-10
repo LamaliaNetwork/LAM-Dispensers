@@ -1,0 +1,23 @@
+# LamDispensers Configuration
+
+# Enable/disable different modules
+modules:
+  # Allow dispensers to mine blocks with tools
+  mining: true
+  # Allow dispensers to place blocks
+  placement: true
+
+# Command configuration
+command:
+  # Main command aliases (first one is primary)
+  aliases:
+    - "lamdispensers"
+    - "ld"
+    - "ldispenser"
+
+# Debug level:
+# 0 = Severe only
+# 1 = Warning and above
+# 2 = Info and above
+# 3 = Debug and above
+debug: 0 
