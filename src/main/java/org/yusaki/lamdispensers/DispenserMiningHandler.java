@@ -111,7 +111,7 @@ public class DispenserMiningHandler implements Listener {
                 ItemStack item = contents[i];
                 if (item != null && item.equals(pickaxe)) {
                     // Check for Unbreaking enchantment
-                    int unbreakingLevel = item.getEnchantmentLevel(Enchantment.UNBREAKING);
+                    int unbreakingLevel = item.getEnchantmentLevel(Enchantment.DURABILITY);
                     
                     // Calculate if damage should be applied
                     boolean shouldTakeDamage = true;
@@ -181,7 +181,7 @@ public class DispenserMiningHandler implements Listener {
         // Only apply efficiency if using correct tool
         float speed = baseSpeed;
         if (isCorrectTool) {
-            int efficiencyLevel = pickaxe.getEnchantmentLevel(Enchantment.EFFICIENCY);
+            int efficiencyLevel = pickaxe.getEnchantmentLevel(Enchantment.DIG_SPEED);
             if (efficiencyLevel > 0) {
                 speed += Math.pow(efficiencyLevel, 2) + 1;
             }
@@ -205,7 +205,9 @@ public class DispenserMiningHandler implements Listener {
     }
 
     private boolean canMineBlock(ItemStack tool, Block block) {
-        return block.getType().isSolid() && !block.getType().isAir(); // Removed tool check
+        return block.getType().isSolid() && 
+               !block.getType().isAir() && 
+               block.getType().getHardness() >= 0; // Check for unbreakable blocks (-1 hardness)
     }
 
     private boolean isCorrectToolForBlock(Material tool, Material block) {
