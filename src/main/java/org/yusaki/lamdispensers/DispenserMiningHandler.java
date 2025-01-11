@@ -8,90 +8,210 @@ import org.bukkit.block.Dispenser;
 import org.bukkit.block.data.Directional;
 import org.bukkit.enchantments.Enchantment;
 import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.BlockDispenseEvent;
+import org.bukkit.event.block.BlockBreakEvent;
+import org.bukkit.event.block.BlockPlaceEvent;
+import org.bukkit.event.inventory.InventoryMoveItemEvent;
 import org.bukkit.inventory.ItemStack;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Random;
+import java.util.Set;
+import java.util.ArrayList;
 
 public class DispenserMiningHandler implements Listener {
     private final LamDispensers plugin;
+    private final Set<Location> activeMiningOperations = Collections.synchronizedSet(new HashSet<>());
+    private final Set<String> activeDispenserTools = Collections.synchronizedSet(new HashSet<>());
 
     public DispenserMiningHandler(LamDispensers plugin) {
         this.plugin = plugin;
     }
 
-    @EventHandler
+    @EventHandler(priority = EventPriority.HIGH)
     public void onDispense(BlockDispenseEvent event) {
+        if (event.isCancelled()) return;
+        
         Block dispenserBlock = event.getBlock();
         if (!(dispenserBlock.getState() instanceof Dispenser)) return;
-
-        Dispenser dispenser = (Dispenser) dispenserBlock.getState();
-        if (!(dispenserBlock.getBlockData() instanceof Directional)) return;
-
+        
         ItemStack dispensedItem = event.getItem();
         if (!isTool(dispensedItem.getType())) return;
-
-        // Cancel the event early for pickaxes
+        
+        // Cancel event early to prevent item ejection
         event.setCancelled(true);
-
-        Directional directional = (Directional) dispenserBlock.getBlockData();
-        BlockFace facing = directional.getFacing();
+        
+        BlockFace facing = ((Directional) dispenserBlock.getBlockData()).getFacing();
         Block targetBlock = dispenserBlock.getRelative(facing);
-
-        if (canMineBlock(dispensedItem, targetBlock)) {
-            startMining(dispenser, dispensedItem, targetBlock);
+        
+        // Return after cancelling if there's no block to mine
+        if (targetBlock.getType().isAir()) return;
+        
+        // Check if chunk is loaded
+        if (!targetBlock.getChunk().isLoaded()) {
+            event.setCancelled(true);
+            return;
         }
-        // If we can't mine the block, do nothing (tool stays in dispenser)
-    }
-
-    private void startMining(Dispenser dispenser, ItemStack pickaxe, Block targetBlock) {
-        Location loc = targetBlock.getLocation();
-        float miningTicks = calculateMiningTicks(pickaxe, targetBlock);
-        int animationTicks = Math.max((int) (miningTicks * 20), 2);
-
-        try {
-            plugin.getServer().getRegionScheduler().execute(plugin, loc, () -> {
-                // Start block break animation
-                showMiningAnimation(targetBlock, 0);
-
-                // Schedule progressive animations
-                for (int i = 1; i < 10; i++) {
-                    final int stage = i;
-                    long stageDelay = Math.max(1, (long) (animationTicks * (i / 9.0)));
-                    scheduleMiningAnimation(loc, targetBlock, stage, stageDelay);
+        
+        plugin.getServer().getRegionScheduler().run(plugin, targetBlock.getLocation(), (task) -> {
+            try {
+                // Recheck if chunk is still loaded
+                if (!targetBlock.getChunk().isLoaded()) {
+                    cleanupTracking(targetBlock.getLocation(), dispenserBlock.getLocation(), event.getItem());
+                    return;
                 }
 
-                // Schedule block break
-                scheduleMiningAnimation(loc, targetBlock, -1, animationTicks);
-                scheduleBlockBreak(loc, dispenser, pickaxe, targetBlock, animationTicks + 1);
-            });
-        } catch (NoSuchMethodError e) {
-            // Fallback for non-Folia servers
-            plugin.getServer().getScheduler().runTask(plugin, () -> {
-                performInstantMining(dispenser, pickaxe, targetBlock);
-            });
-        }
+                Dispenser dispenser = (Dispenser) dispenserBlock.getState();
+                Location targetLoc = targetBlock.getLocation();
+                
+                if (activeMiningOperations.contains(targetLoc)) {
+                    return;
+                }
+
+                // Find best tool asynchronously
+                ItemStack bestTool = findBestTool(dispenser, targetBlock);
+                if (bestTool == null) return;
+
+                String dispenserToolKey = dispenserBlock.getLocation().toString() + ":" + bestTool.getType().name();
+                if (activeDispenserTools.contains(dispenserToolKey)) {
+                    return;
+                }
+
+                activeMiningOperations.add(targetLoc);
+                activeDispenserTools.add(dispenserToolKey);
+                startMining(dispenser, bestTool, targetBlock);
+                
+            } catch (Exception e) {
+                plugin.getLogger().warning("Error in dispenser mining: " + e.getMessage());
+                e.printStackTrace();
+                // Cleanup on error
+                cleanupTracking(targetBlock.getLocation(), dispenserBlock.getLocation(), event.getItem());
+            }
+        });
     }
 
-    private void scheduleMiningAnimation(Location loc, Block block, int stage, long delay) {
-        plugin.getServer().getRegionScheduler().runDelayed(plugin, loc, (a) -> {
+    private ItemStack findBestTool(Dispenser dispenser, Block targetBlock) {
+        ItemStack[] contents = dispenser.getInventory().getContents();
+        ItemStack bestTool = null;
+        float bestSpeed = -1;
+        
+        for (ItemStack item : contents) {
+            if (item == null || !isTool(item.getType()) || !canMineBlock(item, targetBlock)) {
+                continue;
+            }
+            
+            String dispenserToolKey = dispenser.getLocation().toString() + ":" + item.getType().name();
+            if (activeDispenserTools.contains(dispenserToolKey)) {
+                continue;
+            }
+            
+            float miningSpeed = calculateToolEfficiency(item, targetBlock);
+            if (miningSpeed > bestSpeed) {
+                bestSpeed = miningSpeed;
+                bestTool = item;
+            }
+        }
+        
+        return bestTool;
+    }
+
+    private void startMining(Dispenser dispenser, ItemStack tool, Block targetBlock) {
+        Location loc = targetBlock.getLocation();
+        Material originalType = targetBlock.getType();
+        ItemStack originalTool = tool.clone();
+        
+        // Check if chunk is loaded before starting mining
+        if (!targetBlock.getChunk().isLoaded()) {
+            cleanupTracking(loc, dispenser.getLocation(), tool);
+            return;
+        }
+        
+        float miningTicks = calculateMiningTicks(tool, targetBlock);
+        
+        if (miningTicks <= 0.05f) {
+            plugin.getServer().getRegionScheduler().run(plugin, loc, (task) -> {
+                if (!isValidMiningOperation(targetBlock, originalType, dispenser, originalTool)) {
+                    cleanupTracking(loc, dispenser.getLocation(), tool);
+                    return;
+                }
+                performInstantMining(dispenser, tool, targetBlock);
+                cleanupTracking(loc, dispenser.getLocation(), tool);
+            });
+            return;
+        }
+
+        int animationTicks = Math.max((int) (miningTicks * 20), 2);
+        
+        plugin.getServer().getRegionScheduler().run(plugin, loc, (task) -> {
+            if (!isValidMiningOperation(targetBlock, originalType, dispenser, originalTool)) {
+                cleanupTracking(loc, dispenser.getLocation(), tool);
+                return;
+            }
+            showMiningAnimation(targetBlock, 0);
+            
+            for (int i = 1; i < 10; i++) {
+                final int stage = i;
+                long stageDelay = Math.max(1, (long) (animationTicks * (i / 9.0)));
+                scheduleMiningAnimation(loc, targetBlock, originalType, dispenser, originalTool, stage, stageDelay);
+            }
+
+            scheduleBlockBreak(loc, dispenser, tool, targetBlock, originalType, Math.max(1, animationTicks));
+        });
+    }
+
+    private void cleanupTracking(Location blockLoc, Location dispenserLoc, ItemStack tool) {
+        // Clear any existing animation
+        Block block = blockLoc.getBlock();
+        showMiningAnimation(block, -1);
+        
+        // Remove from tracking sets
+        activeMiningOperations.remove(blockLoc);
+        activeDispenserTools.remove(dispenserLoc.toString() + ":" + tool.getType().name());
+    }
+
+    private void scheduleMiningAnimation(Location loc, Block block, Material originalType, 
+                                       Dispenser dispenser, ItemStack originalTool, int stage, long delay) {
+        if (delay <= 0) delay = 1;
+        plugin.getServer().getRegionScheduler().runDelayed(plugin, loc, (task) -> {
+            if (!isValidMiningOperation(block, originalType, dispenser, originalTool)) {
+                cleanupTracking(loc, dispenser.getLocation(), originalTool);
+                showMiningAnimation(block, -1); // Clear animation
+                return;
+            }
             showMiningAnimation(block, stage);
         }, delay);
     }
 
-    private void scheduleBlockBreak(Location loc, Dispenser dispenser, ItemStack pickaxe, Block block, long delay) {
-        Material originalType = block.getType(); // Store the original block type
-        Location originalLocation = block.getLocation().clone(); // Store the original location
+    private void scheduleBlockBreak(Location loc, Dispenser dispenser, ItemStack tool, 
+                                  Block block, Material originalType, long delay) {
+        Location originalLocation = block.getLocation().clone();
+        String dispenserToolKey = dispenser.getLocation().toString() + ":" + tool.getType().name();
+        ItemStack originalTool = tool.clone();
         
-        plugin.getServer().getRegionScheduler().runDelayed(plugin, loc, (a) -> {
-            // Check if the block still exists at the same location and is the same type
-            if (block.getLocation().equals(originalLocation) && block.getType() == originalType) {
-                performInstantMining(dispenser, pickaxe, block);
+        if (delay <= 0) delay = 1;
+        
+        plugin.getServer().getRegionScheduler().runDelayed(plugin, loc, (task) -> {
+            try {
+                if (!isValidMiningOperation(block, originalType, dispenser, originalTool)) {
+                    showMiningAnimation(block, -1); // Clear animation
+                    return;
+                }
+                
+                performInstantMining(dispenser, tool, block);
+            } finally {
+                activeMiningOperations.remove(originalLocation);
+                activeDispenserTools.remove(dispenserToolKey);
             }
-            // If block changed, moved, or was broken, do nothing
         }, delay);
     }
 
     private void performInstantMining(Dispenser dispenser, ItemStack pickaxe, Block block) {
+        // Clear any existing animation first
+        showMiningAnimation(block, -1);
+        
         // Play break sound
         block.getWorld().playSound(
             block.getLocation(),
@@ -105,33 +225,25 @@ public class DispenserMiningHandler implements Listener {
         
         // Handle pickaxe durability
         if (pickaxe.getType().getMaxDurability() > 0) {
-            // Find the actual pickaxe in the dispenser's inventory
             ItemStack[] contents = dispenser.getInventory().getContents();
             for (int i = 0; i < contents.length; i++) {
                 ItemStack item = contents[i];
                 if (item != null && item.equals(pickaxe)) {
-                    // Check for Unbreaking enchantment
                     int unbreakingLevel = item.getEnchantmentLevel(Enchantment.DURABILITY);
                     
-                    // Calculate if damage should be applied
                     boolean shouldTakeDamage = true;
                     if (unbreakingLevel > 0) {
-                        // Unbreaking has a chance to prevent durability loss
-                        // Formula: 100/(unbreaking level + 1)% chance to reduce durability
                         double chance = 1.0 / (unbreakingLevel + 1);
                         shouldTakeDamage = Math.random() < chance;
                     }
                     
                     if (shouldTakeDamage) {
-                        // Apply 10x durability damage if wrong tool
-                        int durabilityDamage = isCorrectToolForBlock(pickaxe.getType(), block.getType()) ? 1 : 10;
-                        short newDurability = (short) (item.getDurability() + durabilityDamage);
+                        // Only apply 1 durability damage, removed the 10x multiplier
+                        short newDurability = (short) (item.getDurability() + 1);
                         item.setDurability(newDurability);
                         
-                        // Update the item in the dispenser
                         dispenser.getInventory().setItem(i, item);
                         
-                        // Check if pickaxe should break
                         if (newDurability >= item.getType().getMaxDurability()) {
                             block.getWorld().playSound(
                                 dispenser.getLocation(),
@@ -171,36 +283,56 @@ public class DispenserMiningHandler implements Listener {
         }
     }
 
-    private float calculateMiningTicks(ItemStack pickaxe, Block block) {
+    private float calculateMiningTicks(ItemStack tool, Block block) {
         float hardness = block.getType().getHardness();
         if (hardness == 0) return 0.05f; // Instant break for zero hardness blocks
         
-        float baseSpeed = getBaseBreakingSpeed(pickaxe.getType(), block.getType());
-        boolean isCorrectTool = isCorrectToolForBlock(pickaxe.getType(), block.getType());
+        boolean isCorrectTool = isCorrectToolForBlock(tool.getType(), block.getType());
+        float speedMultiplier = getBaseBreakingSpeed(tool.getType(), block.getType());
         
-        // Only apply efficiency if using correct tool
-        float speed = baseSpeed;
+        // If it's the correct tool and we can harvest it
         if (isCorrectTool) {
-            int efficiencyLevel = pickaxe.getEnchantmentLevel(Enchantment.DIG_SPEED);
+            // Apply efficiency enchantment
+            int efficiencyLevel = tool.getEnchantmentLevel(Enchantment.DIG_SPEED);
             if (efficiencyLevel > 0) {
-                speed += Math.pow(efficiencyLevel, 2) + 1;
+                speedMultiplier += (efficiencyLevel * efficiencyLevel) + 1;
             }
+        } else {
+            // If wrong tool, reset multiplier to 1
+            speedMultiplier = 1.0f;
         }
 
-        // Calculate breaking time according to vanilla mechanics
-        float hardnessMultiplier = isCorrectTool ? 1.5f : 5.0f;
-        float breakingTime = (hardness * hardnessMultiplier) / speed;
+        // Calculate damage per tick
+        float damage = speedMultiplier / hardness;
         
-        // Cap minimum and maximum times
-        return Math.max(0.05f, Math.min(breakingTime, 20f));
+        // Apply harvest modifier
+        if (isCorrectTool) {
+            damage /= 30;
+        } else {
+            damage /= 100;
+        }
+
+        // Check for instant breaking
+        if (damage > 1) {
+            return 0.05f; // One tick
+        }
+
+        // Convert to ticks and then to seconds
+        float ticks = (float) Math.ceil(1.0f / damage);
+        float seconds = ticks / 20.0f;
+        
+        // Cap maximum mining time at 20 seconds
+        return Math.min(seconds, 20.0f);
     }
 
     private float getBaseBreakingSpeed(Material tool, Material block) {
-        if (tool.name().contains("NETHERITE")) return 10.0f;
-        if (tool.name().contains("DIAMOND")) return 8.0f;
-        if (tool.name().contains("IRON")) return 6.0f;
-        if (tool.name().contains("STONE")) return 4.0f;
-        if (tool.name().contains("WOODEN")) return 2.0f;
+        String toolName = tool.name();
+        if (toolName.contains("GOLD")) return 12.0f;
+        if (toolName.contains("NETHERITE")) return 9.0f;
+        if (toolName.contains("DIAMOND")) return 8.0f;
+        if (toolName.contains("IRON")) return 6.0f;
+        if (toolName.contains("STONE")) return 4.0f;
+        if (toolName.contains("WOODEN")) return 2.0f;
         return 1.0f;
     }
 
@@ -279,5 +411,118 @@ public class DispenserMiningHandler implements Listener {
                material.name().endsWith("_AXE") ||
                material.name().endsWith("_SHOVEL") ||
                material.name().endsWith("_HOE");
+    }
+
+    public int getActiveMiningCount() {
+        return activeMiningOperations.size();
+    }
+
+    public int getActiveToolCount() {
+        return activeDispenserTools.size();
+    }
+
+    public Set<Location> getActiveMiningLocations() {
+        return new HashSet<>(activeMiningOperations);
+    }
+
+    public Set<String> getActiveToolOperations() {
+        return new HashSet<>(activeDispenserTools);
+    }
+
+    private float calculateToolEfficiency(ItemStack tool, Block block) {
+        if (!isCorrectToolForBlock(tool.getType(), block.getType())) {
+            return 0.1f; // Very low priority for wrong tools
+        }
+        
+        float baseSpeed = getBaseBreakingSpeed(tool.getType(), block.getType());
+        int efficiencyLevel = tool.getEnchantmentLevel(Enchantment.DIG_SPEED);
+        
+        // Add efficiency bonus
+        if (efficiencyLevel > 0) {
+            baseSpeed += (efficiencyLevel * efficiencyLevel) + 1;
+        }
+        
+        // Prioritize better tool materials
+        if (tool.getType().name().contains("NETHERITE")) baseSpeed *= 1.2f;
+        else if (tool.getType().name().contains("DIAMOND")) baseSpeed *= 1.1f;
+        
+        // Consider durability - slightly prefer tools with more durability left
+        float durabilityFactor = 1.0f - (float)tool.getDurability() / tool.getType().getMaxDurability();
+        baseSpeed *= (0.9f + (0.1f * durabilityFactor));
+        
+        return baseSpeed;
+    }
+
+    // Add chunk unload event handler
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onChunkUnload(org.bukkit.event.world.ChunkUnloadEvent event) {
+        // Clean up any mining operations in the unloading chunk
+        activeMiningOperations.removeIf(loc -> {
+            if (loc.getChunk().equals(event.getChunk())) {
+                String toolKey = null;
+                for (String key : activeDispenserTools) {
+                    if (key.contains(loc.toString())) {
+                        toolKey = key;
+                        break;
+                    }
+                }
+                if (toolKey != null) {
+                    activeDispenserTools.remove(toolKey);
+                }
+                return true;
+            }
+            return false;
+        });
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onBlockBreak(BlockBreakEvent event) {
+        Location loc = event.getBlock().getLocation();
+        if (activeMiningOperations.contains(loc)) {
+            // Clear animation before removing tracking
+            showMiningAnimation(event.getBlock(), -1);
+            activeMiningOperations.remove(loc);
+            activeDispenserTools.removeIf(key -> key.contains(loc.toString()));
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onInventoryChange(InventoryMoveItemEvent event) {
+        if (event.getSource().getHolder() instanceof Dispenser) {
+            Dispenser dispenser = (Dispenser) event.getSource().getHolder();
+            String dispenserLoc = dispenser.getLocation().toString();
+            // Check if this dispenser has any active operations
+            activeDispenserTools.removeIf(key -> {
+                if (key.startsWith(dispenserLoc)) {
+                    // Find and clear any associated mining operations
+                    activeMiningOperations.forEach(loc -> showMiningAnimation(loc.getBlock(), -1));
+                    return true;
+                }
+                return false;
+            });
+        }
+    }
+
+    private boolean isValidMiningOperation(Block block, Material originalType, 
+                                         Dispenser dispenser, ItemStack originalTool) {
+        // Check if chunk is loaded
+        if (!block.getChunk().isLoaded()) return false;
+        
+        // Check if block has moved or changed
+        if (block.getType() != originalType || !block.getLocation().equals(block.getLocation())) return false;
+        
+        // Check if dispenser still exists and has the tool
+        if (!(dispenser.getBlock().getState() instanceof Dispenser)) return false;
+        
+        // Check if tool still exists in dispenser with same properties
+        boolean toolExists = false;
+        for (ItemStack item : dispenser.getInventory().getContents()) {
+            if (item != null && item.isSimilar(originalTool)) {
+                toolExists = true;
+                break;
+            }
+        }
+        
+        return toolExists;
     }
 } 

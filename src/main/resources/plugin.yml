@@ -6,9 +6,18 @@ depend: [YskLib]
 folia-supported: true
 commands:
   lamdispensers:
+    aliases: [ld, ldispenser]
     description: Main command for LamDispensers
     usage: /lamdispensers reload
+  ldperf:
+    description: Monitor LamDispensers performance
+    usage: /ldperf <memory|tasks|gc|help>
+    permission: lamdispensers.performance
+    aliases: [ldp]
 permissions:
   lamdispensers.reload:
     description: Allows reloading the plugin configuration
+    default: op
+  lamdispensers.performance:
+    description: Allows access to performance monitoring commands
     default: op

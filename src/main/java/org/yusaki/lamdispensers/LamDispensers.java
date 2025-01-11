@@ -50,6 +50,11 @@ public final class LamDispensers extends JavaPlugin {
 
         wrapper.logDebug("LamDispensers enabled with command: " + primaryCommand + 
                         " and aliases: " + (aliases.size() > 1 ? aliases.subList(1, aliases.size()) : "none"));
+
+        miningHandler = new DispenserMiningHandler(this);
+        PerformanceMonitor performanceMonitor = new PerformanceMonitor(this, miningHandler);
+        getCommand("ldperf").setExecutor(performanceMonitor);
+        getCommand("ldperf").setTabCompleter(performanceMonitor);
     }
 
     @Override
