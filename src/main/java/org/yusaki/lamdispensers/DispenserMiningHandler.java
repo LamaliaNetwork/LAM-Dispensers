@@ -151,15 +151,42 @@ public class DispenserMiningHandler implements Listener {
                 cleanupTracking(loc, dispenser.getLocation(), tool);
                 return;
             }
-            showMiningAnimation(targetBlock, 0);
             
-            for (int i = 1; i < 10; i++) {
-                final int stage = i;
-                long stageDelay = Math.max(1, (long) (animationTicks * (i / 9.0)));
-                scheduleMiningAnimation(loc, targetBlock, originalType, dispenser, originalTool, stage, stageDelay);
+            // Calculate number of animation steps (9 steps total, from 0.1 to 0.9)
+            int steps = 9;
+            int stepInterval = Math.max(1, animationTicks / steps);
+            
+            // Start with initial damage
+            showMiningAnimation(targetBlock, 0.1f);
+            
+            // Schedule animation updates
+            for (int i = 2; i <= steps; i++) {
+                final float progress = i / (float) steps;
+                plugin.getServer().getRegionScheduler().runDelayed(plugin, loc, (animTask) -> {
+                    if (isValidMiningOperation(targetBlock, originalType, dispenser, originalTool)) {
+                        showMiningAnimation(targetBlock, progress);
+                    }
+                }, stepInterval * (i - 1));
             }
-
-            scheduleBlockBreak(loc, dispenser, tool, targetBlock, originalType, Math.max(1, animationTicks));
+            
+            // Schedule the block break
+            scheduleBlockBreak(loc, dispenser, tool, targetBlock, originalType, animationTicks);
+            
+            // Play digging sound periodically
+            int soundInterval = Math.max(1, animationTicks / 4);
+            for (int i = 1; i <= 4; i++) {
+                final int stage = i;
+                plugin.getServer().getRegionScheduler().runDelayed(plugin, loc, (soundTask) -> {
+                    if (isValidMiningOperation(targetBlock, originalType, dispenser, originalTool)) {
+                        targetBlock.getWorld().playSound(
+                            loc,
+                            targetBlock.getBlockData().getSoundGroup().getHitSound(),
+                            1.0f,
+                            0.8f
+                        );
+                    }
+                }, soundInterval * i);
+            }
         });
     }
 
@@ -261,25 +288,17 @@ public class DispenserMiningHandler implements Listener {
         }
     }
 
-    private void showMiningAnimation(Block block, int stage) {
-        // Stage -1 removes the animation, 0-9 shows progressive breaking
+    private void showMiningAnimation(Block block, float progress) {
         Location blockLoc = block.getLocation();
         World world = block.getWorld();
         
-        // Only get players within 32 blocks (squared = 1024)
+        // For negative values or completion, clear the animation
+        float damage = progress < 0 ? 0.0f : Math.min(progress, 1.0f);
+        
+        // Send the animation packet to nearby players
         world.getPlayers().stream()
             .filter(player -> player.getLocation().distanceSquared(blockLoc) <= 1024)
-            .forEach(player -> player.sendBlockDamage(blockLoc, stage < 0 ? 0 : stage / 9.0f));
-
-        // Play digging sound every other stage (to avoid too much noise)
-        if (stage >= 0 && stage % 2 == 0) {
-            world.playSound(
-                blockLoc,
-                block.getBlockData().getSoundGroup().getHitSound(),
-                1.0f,
-                0.8f
-            );
-        }
+            .forEach(player -> player.sendBlockDamage(blockLoc, damage));
     }
 
     private float calculateMiningTicks(ItemStack tool, Block block) {
