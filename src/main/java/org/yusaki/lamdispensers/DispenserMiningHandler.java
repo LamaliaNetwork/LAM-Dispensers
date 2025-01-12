@@ -2,6 +2,7 @@ package org.yusaki.lamdispensers;
 
 import org.bukkit.Location;
 import org.bukkit.Material;
+import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
 import org.bukkit.block.Dispenser;
@@ -262,20 +263,18 @@ public class DispenserMiningHandler implements Listener {
 
     private void showMiningAnimation(Block block, int stage) {
         // Stage -1 removes the animation, 0-9 shows progressive breaking
-        for (int x = -16; x <= 16; x++) {
-            for (int z = -16; z <= 16; z++) {
-                Location loc = block.getLocation().add(x, 0, z);
-                if (loc.distanceSquared(block.getLocation()) <= 256) { // 16 blocks radius
-                    block.getWorld().getPlayers().forEach(player -> 
-                        player.sendBlockDamage(block.getLocation(), stage < 0 ? 0 : stage / 9.0f));
-                }
-            }
-        }
+        Location blockLoc = block.getLocation();
+        World world = block.getWorld();
+        
+        // Only get players within 32 blocks (squared = 1024)
+        world.getPlayers().stream()
+            .filter(player -> player.getLocation().distanceSquared(blockLoc) <= 1024)
+            .forEach(player -> player.sendBlockDamage(blockLoc, stage < 0 ? 0 : stage / 9.0f));
 
         // Play digging sound every other stage (to avoid too much noise)
         if (stage >= 0 && stage % 2 == 0) {
-            block.getWorld().playSound(
-                block.getLocation(),
+            world.playSound(
+                blockLoc,
                 block.getBlockData().getSoundGroup().getHitSound(),
                 1.0f,
                 0.8f
