@@ -67,7 +67,7 @@ public class DispenserPlacementHandler implements Listener {
                 // Saplings
                 Material.OAK_SAPLING, Material.SPRUCE_SAPLING, Material.BIRCH_SAPLING,
                 Material.JUNGLE_SAPLING, Material.ACACIA_SAPLING, Material.DARK_OAK_SAPLING,
-                Material.MANGROVE_PROPAGULE,
+                Material.MANGROVE_PROPAGULE,Material.CHERRY_SAPLING,
 
                 // Other common transparent blocks
                 Material.TORCH, Material.REDSTONE_TORCH, Material.LEVER, Material.STONE_BUTTON,
